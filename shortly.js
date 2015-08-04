@@ -2,7 +2,7 @@ var express = require('express');
 var util = require('./lib/utility');
 var partials = require('express-partials');
 var bodyParser = require('body-parser');
-var session = require('express-session');
+var session = require('express-session'); // requires sessions
 
 var db = require('./app/config');
 var Users = require('./app/collections/users');
@@ -26,20 +26,25 @@ app.use(session({secret:'shhhhhhhh',
   resave: true}));
 // app.use(express.session());
 
+// checks whether a username exists (user is logged in)
 var restrict = function(req, res, next){
   if(req.session.username){
-    next();
+    next(); // abstraction of what next responder shoudl be
   }else{
     res.redirect('/login');
   }
 }
 
 app.get('/', function(req, res) {
-  // res.redirect('/login');
   restrict(req, res, function(){
     res.render('index'); // render automatically looks in views
   });
 });
+/* Alternatively:
+app.get('/', restrict, function(req, res) {
+  res.render('index');
+});
+*/
 
 app.get('/create', function(req, res) {
   restrict(req, res, function() {
@@ -92,26 +97,26 @@ app.get('/signup', function(req, res) {
   res.render('signup');
 });
 
+// in better style
 app.post('/signup', function(req, res){
-  var user = new User({
-    username: req.body.username,
-    password: req.body.password
-  });
+  var username: req.body.username;
+  var password: req.body.password;
 
-  user.save().then(function(newUser){
-    Users.add(newUser);
-    // Users.fetch().then(function(content){
-    //   res.status(200).send(content);
-    // });
-    req.session.regenerate(function() {
-      req.session.username = req.body.username;
-      restrict(req, res, function() {
-        res.redirect('/');
+  new User({username:username}).fetch().then(function(user) {
+    if (!user) { // hash is combo of salt & hashed pw in db
+      bcrypt.hash(user.password, null, null, function(err,hash){
+        Users.create({ // function that operates on collection and does an instantiation and save all in one step
+          username: username,
+          password: hash
+        }).then(function(user) {
+          createSession(req, res, user);
+        });
       });
-    });
-    res.status(200); 
+    } else {
+      console.log('Account already exists');
+      res.redirect('/signup');
+    }
   });
-
 });
 
 /************************************************************/
@@ -122,23 +127,25 @@ app.get('/login', function(req, res){
   res.render('login');
 });
 
+var createSession = function(req, res, newUser) {
+  return req.session.regenerate(function() { // generates a brand new id & cookie for new session. if there's no session, it won't do anything
+      req.session.username = username;
+      res.redirect('/');
+    });
+}; // creates a new session
+
 app.post('/login', function(req, res){
   var username = req.body.username;
   var password = req.body.password;
 
-  new User({username: username, password: password}).fetch().then(function(found) {
-    if (found) {
-      req.session.regenerate(function() {
-        req.session.username = username;
-        restrict(req, res, function() {
-          res.redirect('/');
-        });
-      });
-    }
-    else {
-      res.redirect('/login');
-    }
-
+  new User({username: username}).fetch().then(function(user) {
+    if (!user) {return res.redirect('/login');}
+    bcrypt.compare(password, user.get('password'), function(err, match){
+      if (match) {createSession(req, res, user);
+      } else {
+        res.redirect('/login');
+      }
+    });
   });
 });
 
